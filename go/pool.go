@@ -28,6 +28,8 @@ type Pool[T any] struct {
     jobPoolSize  int
     batchSize    int
     pollInterval time.Duration
+    jobBufferPool   sync.Pool
+    maxJobBufferCap int
 }
 
 type PoolOption struct {
@@ -48,40 +50,50 @@ type PoolOption struct {
 func NewPool[T any](opt PoolOption, worker Worker[T]) (*Pool[T], error) {
     // Guard.
     if worker == nil {
-        return nil, fmt.Errorf("failed to create pool: worker=nil")
+        return nil, fmt.Errorf("failed to create pool: worker=null")
     }
 
     // Set defaults.
-	if opt.QueueSize <= 0 {
-		opt.QueueSize = 1024
-	}
-	if opt.BatchSize <= 0 {
-		opt.BatchSize = 128
-	}
+    if opt.QueueSize <= 0 {
+        opt.QueueSize = 1024
+    }
+    if opt.BatchSize <= 0 {
+        opt.BatchSize = 128
+    }
     if opt.BatchSize > opt.QueueSize {
         opt.BatchSize = opt.QueueSize
     }
-	if opt.NumWorkers <= 0 {
-		opt.NumWorkers = 1
-	}
-	if opt.PollInterval <= 0 {
-		opt.PollInterval = 25 * time.Millisecond
-	}
+    if opt.NumWorkers <= 0 {
+        opt.NumWorkers = 1
+    }
+    if opt.PollInterval <= 0 {
+        opt.PollInterval = 25 * time.Millisecond
+    }
 
     // Create a pool.
     p := &Pool[T]{
-		worker:       worker,
-		pingCh:       make(chan struct{}, 1),
-		workerCh:     make(chan struct{}, opt.NumWorkers),
-		jobPool:      make([]T, opt.QueueSize),
-		jobPoolHead:  0,
-		jobPoolTail:  0,
-		jobPoolSize:  0,
-		batchSize:    opt.BatchSize,
-		pollInterval: opt.PollInterval,
-	}
+        worker:       worker,
+        pingCh:       make(chan struct{}, 1),
+        workerCh:     make(chan struct{}, opt.NumWorkers),
+        jobPool:      make([]T, opt.QueueSize),
+        jobPoolHead:  0,
+        jobPoolTail:  0,
+        jobPoolSize:  0,
+        batchSize:    opt.BatchSize,
+        pollInterval: opt.PollInterval,
+        maxJobBufferCap: opt.BatchSize * 4,
+    }
 
-	return p, nil
+    // Initialize jobsPool for reusing []T buffers.
+    // Store *[]T so we can reset length and keep capacity.
+    p.jobBufferPool = sync.Pool{
+        New: func() any {
+            b := make([]T, 0, p.batchSize)
+            return &b
+        },
+    }
+
+    return p, nil
 }
 
 
@@ -272,20 +284,23 @@ func (p *Pool[T]) runWorker(ctx context.Context) {
     defer ticker.Stop()
 
     for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-p.pingCh:
-			p.dispatchJob(ctx)
-		case <-ticker.C:
-			p.dispatchJob(ctx)
-		}
-	}
+        select {
+        case <-ctx.Done():
+            return
+        case <-p.pingCh:
+            p.dispatchJob(ctx)
+        case <-ticker.C:
+            p.dispatchJob(ctx)
+        }
+    }
 }
 
 
 //
 // Dispatch queued jobs to workers.
+//
+// Version:
+//   - 2026-02-13: Created new.
 //
 func (p *Pool[T]) dispatchJob(ctx context.Context) {
     // Check if the context has already done.
@@ -320,15 +335,25 @@ func (p *Pool[T]) dispatchJob(ctx context.Context) {
         batchLen = p.jobPoolSize
     }
 
-    jobs := make([]T, 0, batchLen)
+    // Borrow a reusable buffer for jobs.
+    bufp := p.jobBufferPool.Get().(*[]T)
+    jobs := (*bufp)[:0]
+
+    // Ensure capacity is enough; if not, allocate once for this dispatch.
+    // (This will be returned to pool unless it is too large.)
+    if cap(jobs) < batchLen {
+        p.jobBufferPool.Put(bufp)
+        bufp = nil
+        jobs = make([]T, 0, batchLen)
+    }
 
     // Manage job_pool_head / job_pool_size.
+    var zero T
     for i := 0; i < batchLen; i++ {
         j := p.jobPool[p.jobPoolHead]
         jobs = append(jobs, j)
 
         // Clear slot to avoid holding references (if Job contains pointers).
-        var zero T
         p.jobPool[p.jobPoolHead] = zero
 
         p.jobPoolHead++
@@ -342,12 +367,19 @@ func (p *Pool[T]) dispatchJob(ctx context.Context) {
 
     p.mu.Unlock()
 
-    go p.work(ctx, jobs)
+    go p.work(ctx, jobs, bufp)
 }
 
 
-func (p *Pool[T]) work(ctx context.Context, jobs []T) {
+func (p *Pool[T]) work(ctx context.Context, jobs []T, bufp *[]T) {
     defer func() {
+        // Return jobs buffer to pool unless it is too large.
+        // This avoids keeping huge underlying arrays forever.
+        if bufp != nil && cap(jobs) <= p.maxJobBufferCap {
+            *bufp = jobs[:0]
+            p.jobBufferPool.Put(bufp)
+        }
+
         <-p.workerCh
     }()
 
