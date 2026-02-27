@@ -117,7 +117,7 @@ func (p *Pool[T]) Enqueue(job T) error {
 
     // Check if the queue must have capacity.
     if p.jobPoolSize >= len(p.jobPool) {
-        return fmt.Errorf("failed to enqueue because the workerpool queue is full.")
+        return fmt.Errorf("failed to enqueue because the workerpool queue is full: job_pool_size=%d len_job_pool=%d", p.jobPoolSize, len(p.jobPool))
     }
 
     // Push to ring buffer (FIFO).
