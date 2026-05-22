@@ -12,7 +12,7 @@ import (
 
 
 type Worker[T any] interface {
-    Work(ctx context.Context, jobs []T) error
+    Work(ctx context.Context, jobs []T)
 }
 
 type Pool[T any] struct {
@@ -404,6 +404,7 @@ func (p *Pool[T]) work(ctx context.Context, jobs []T, bufp *[]T) {
         return
     default:
     }
-    _ = p.worker.Work(ctx, jobs)
+
+    p.worker.Work(ctx, jobs)
 }
 

@@ -20,19 +20,18 @@ type Job struct {
 
 type Worker struct{}
 
-func (w *Worker) Work(ctx context.Context, jobs []Job) error {
+func (w *Worker) Work(ctx context.Context, jobs []Job) {
     // Simulate batch work.
     fmt.Printf("[worker] batch_len=%d\n", len(jobs))
     for _, j := range jobs {
         select {
         case <-ctx.Done():
             fmt.Println("[worker] canceled")
-            return ctx.Err()
+            return
         default:
         }
         fmt.Printf("  - job id=%d body=%q\n", j.ID, j.Body)
     }
-    return nil
 }
 
 
