@@ -41,6 +41,22 @@ type PoolOption struct {
 
 
 //
+// Build default pool option.
+//
+// Version:
+//   - 2026-05-22: Added.
+//
+func BuildDefaultPoolOption() PoolOption {
+    return PoolOption{
+        QueueSize:    1024,
+        NumWorkers:   1,
+        PollInterval: 25*time.Millisecond,
+        BatchSize:    128,
+    }
+}
+
+
+//
 // Creates a Pool instance (not started).
 // It allocates the ring buffer and channels based on options.
 //
@@ -117,7 +133,7 @@ func (p *Pool[T]) Enqueue(job T) error {
 
     // Check if the queue must have capacity.
     if p.jobPoolSize >= len(p.jobPool) {
-        return fmt.Errorf("failed to enqueue because the workerpool queue is full: job_pool_size=%d len_job_pool=%d", p.jobPoolSize, len(p.jobPool))
+        return fmt.Errorf("failed to enqueue because the workerpool queue is full: job_pool_size=%d", p.jobPoolSize)
     }
 
     // Push to ring buffer (FIFO).
@@ -164,7 +180,7 @@ func (p *Pool[T]) EnqueueBatch(jobs []T) error {
     // Check if the queue must have capacity.
     capLeft := len(p.jobPool) - p.jobPoolSize
     if len(jobs) > capLeft {
-        return fmt.Errorf("failed to enqueue because the workerpool queue is full.")
+        return fmt.Errorf("failed to enqueue batch because the workerpool queue is full: cap_left=%d", capLeft)
     }
 
     // Push to ring buffer (FIFO).
