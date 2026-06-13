@@ -204,23 +204,12 @@ func (p *Pool[T]) EnqueueBatch(jobs []T) error {
 
 
 //
-// Starts the pool using context.Background() as the parent.
+// Starts the pool using the given context.
 //
 // Version:
 //   - 2026-02-02: Created new.
 //
-func (p *Pool[T]) Start() error {
-    return p.StartWithContext(context.Background())
-}
-
-
-//
-// Starts the pool using the given parent context.
-//
-// Version:
-//   - 2026-02-02: Created new.
-//
-func (p *Pool[T]) StartWithContext(parentCtx context.Context) error {
+func (p *Pool[T]) Start(parentCtx context.Context) error {
     // Guard.
     if parentCtx == nil {
         return fmt.Errorf("failed to start workerpool: parent_ctx=null")

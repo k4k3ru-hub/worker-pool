@@ -51,7 +51,7 @@ func main() {
     }
 
     // Start.
-    if err := p.Start(); err != nil {
+    if err := p.Start(context.Background()); err != nil {
         panic(err)
     }
 
@@ -74,7 +74,7 @@ func main() {
     }
 
     // Re-start (new context).
-    if err := p.StartWithContext(context.Background()); err != nil {
+    if err := p.Start(context.Background()); err != nil {
         panic(err)
     }
     fmt.Println("[main] restarted pool")
