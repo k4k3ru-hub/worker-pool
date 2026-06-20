@@ -16,27 +16,29 @@ type Worker[T any] interface {
 }
 
 type Pool[T any] struct {
-    worker       Worker[T]
-    ctx          context.Context
-    cancel       context.CancelFunc
-    pingCh       chan struct{}
-    workerCh     chan struct{}
-    mu           sync.Mutex
-    jobPool      []T
-    jobPoolHead  int
-    jobPoolTail  int
-    jobPoolSize  int
-    batchSize    int
-    pollInterval time.Duration
-    jobBufferPool   sync.Pool
-    maxJobBufferCap int
+    worker            Worker[T]
+    ctx               context.Context
+    cancel            context.CancelFunc
+    pingCh            chan struct{}
+    workerCh          chan struct{}
+    mu                sync.Mutex
+    jobPool           []T
+    jobPoolHead       int
+    jobPoolTail       int
+    jobPoolSize       int
+    batchSize         int
+    pollInterval      time.Duration
+    jobBufferPool     sync.Pool
+    maxJobBufferCap   int
+    dispatchOnEnqueue bool
 }
 
 type PoolOption struct {
-    QueueSize    int
-    NumWorkers   int
-    PollInterval time.Duration
-    BatchSize    int
+    QueueSize         int
+    NumWorkers        int
+    PollInterval      time.Duration
+    BatchSize         int
+    DispatchOnEnqueue bool
 }
 
 
@@ -44,14 +46,16 @@ type PoolOption struct {
 // Build default pool option.
 //
 // Version:
+//   - 2026-06-20: Add DispatchOnEnqueue.
 //   - 2026-05-22: Added.
 //
 func BuildDefaultPoolOption() PoolOption {
     return PoolOption{
-        QueueSize:    1024,
-        NumWorkers:   1,
-        PollInterval: 25*time.Millisecond,
-        BatchSize:    128,
+        QueueSize:         1024,
+        NumWorkers:        1,
+        PollInterval:      25*time.Millisecond,
+        BatchSize:         128,
+        DispatchOnEnqueue: false,
     }
 }
 
@@ -61,6 +65,7 @@ func BuildDefaultPoolOption() PoolOption {
 // It allocates the ring buffer and channels based on options.
 //
 // Version:
+//   - 2026-06-20: Add DispatchOnEnqueue.
 //   - 2026-02-01: Created new.
 //
 func NewPool[T any](opt PoolOption, worker Worker[T]) (*Pool[T], error) {
@@ -88,16 +93,17 @@ func NewPool[T any](opt PoolOption, worker Worker[T]) (*Pool[T], error) {
 
     // Create a pool.
     p := &Pool[T]{
-        worker:       worker,
-        pingCh:       make(chan struct{}, 1),
-        workerCh:     make(chan struct{}, opt.NumWorkers),
-        jobPool:      make([]T, opt.QueueSize),
-        jobPoolHead:  0,
-        jobPoolTail:  0,
-        jobPoolSize:  0,
-        batchSize:    opt.BatchSize,
-        pollInterval: opt.PollInterval,
-        maxJobBufferCap: opt.BatchSize * 4,
+        worker:            worker,
+        pingCh:            make(chan struct{}, 1),
+        workerCh:          make(chan struct{}, opt.NumWorkers),
+        jobPool:           make([]T, opt.QueueSize),
+        jobPoolHead:       0,
+        jobPoolTail:       0,
+        jobPoolSize:       0,
+        batchSize:         opt.BatchSize,
+        pollInterval:      opt.PollInterval,
+        maxJobBufferCap:   opt.BatchSize * 4,
+        dispatchOnEnqueue: opt.DispatchOnEnqueue,
     }
 
     // Initialize jobsPool for reusing []T buffers.
@@ -117,6 +123,7 @@ func NewPool[T any](opt PoolOption, worker Worker[T]) (*Pool[T], error) {
 // Enqueue a job to the queue (non-blocking).
 //
 // Version:
+//   - 2026-06-20: Add DispatchOnEnqueue.
 //   - 2026-02-02: Created new.
 //
 func (p *Pool[T]) Enqueue(job T) error {
@@ -144,10 +151,12 @@ func (p *Pool[T]) Enqueue(job T) error {
     }
     p.jobPoolSize++
 
-    // Ping (non-blocking) to wake up runWorker.
-    select {
-    case p.pingCh <- struct{}{}:
-    default:
+    // Dispatch immediately on enqueue if enabled.
+    if p.dispatchOnEnqueue {
+        select {
+        case p.pingCh <- struct{}{}:
+        default:
+        }
     }
 
     return nil
@@ -158,6 +167,7 @@ func (p *Pool[T]) Enqueue(job T) error {
 // Enqueue multiple jobs to the queue at once (non-blocking).
 //
 // Version:
+//   - 2026-06-20: Add DispatchOnEnqueue.
 //   - 2026-02-02: Created new.
 //
 func (p *Pool[T]) EnqueueBatch(jobs []T) error {
@@ -193,10 +203,12 @@ func (p *Pool[T]) EnqueueBatch(jobs []T) error {
         p.jobPoolSize++
     }
 
-    // Ping (non-blocking) to wake up runWorker.
-    select {
-    case p.pingCh <- struct{}{}:
-    default:
+    // Dispatch immediately on enqueue if enabled.
+    if p.dispatchOnEnqueue {
+        select {
+        case p.pingCh <- struct{}{}:
+        default:
+        }
     }
 
     return nil
